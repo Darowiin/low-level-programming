@@ -1,145 +1,106 @@
-%include "io64.inc"
-
 section .rodata
-    space db ' ', 0
-    fmt_dec db "%d", 0
-    fmt_input_prompt db "Enter array size: ", 0
-    fmt_elements_prompt db "Enter array elements: ", 0
-    fmt_output_prompt db "Sorted array: ", 0
-
-CEXTERN printf
-CEXTERN scanf
-CEXTERN malloc
-CEXTERN free
-CEXTERN puts
+    fmt: dq "%lld ",  0
 
 section .text
+    extern scanf
+    extern printf
+    extern puts
+    extern malloc
+    extern free
+
 global main
+    ;n - [rbp-8]
+    ;i - r12
+    ;j - r13 (во время сортировки)
+    ;minI - r14
+    ;tmp - r15
+    
 main:
+    mov rbp, rsp; for correct debugging
+    push rsi
     push rbp
-    mov rbp, rsp
-    sub rsp, 32              ; Выделяем место для локальных переменных
+    mov rbp, rsp; for correct debugging
     
-    lea rcx, [fmt_input_prompt]
-    call printf              ; printf("Enter array size: ")
+    sub rsp, 8 + 32
     
-    lea rcx, [fmt_dec]
-    lea rdx, [rbp-4]        ; Адрес переменной n
-    call scanf              ; scanf("%d", &n)
-
-    mov eax, dword [rbp-4]  ; Проверяем n > 0
-    test eax, eax
-    jle cleanup          ; Выход если n <= 0, для отладки
+    lea rcx, [fmt] 
+    lea rdx, [rbp - 8] 
+    call scanf
     
-    mov eax, dword [rbp-4]  ; Загружаем значение n
-    mov edx, eax
-    mov r13d, eax
-    lea ecx, [fmt_dec]       ; Строка формата для вывода числа
-    call printf
-    lea ecx, [space]
-    call puts
-    
-    ; --- Выделение памяти ---
-    mov eax, r13d     ; Загружаем количество элементов массива (n)
-    imul rax, rax, 4           ; Результат записывается в 64-битный rax
-    mov rdi, rax               ; Аргумент для malloc
+    mov rcx, 400
     call malloc
-    mov [rbp-8], rax           ; Сохраняем указатель массива
-    test rax, rax
-    jz cleanup                 ; Если malloc вернул NULL, завершение
+    mov rsi, rax
+    mov r12, 0
 
-    ; --- Ввод элементов массива ---
-    lea rcx, [fmt_elements_prompt]
-    call printf                ; printf("Enter array elements: ")
-
-    xor r8d, r8d               ; i = 0
-
-input_loop:
-    mov eax, r13d
-    cmp r8d, eax     ; i < n ?
-    jge sort_start
+start_in:                       
+    cmp r12, [rbp-8]
+    jge start_sort
+    lea rcx, [fmt] 
+    lea rdx, [rsi + r12*8] 
+    call scanf
     
-    mov rax, [rbp-8]           ; Адрес массива
-    lea rcx, [fmt_dec]         ; Формат "%d"
-    lea rdx, [rax + r8*4]      ; Адрес mass[i]
-    call scanf                 ; scanf("%d", &mass[i])
+    inc r12
+    jmp start_in
     
-    lea rcx, [fmt_dec]   ; строка формата
-    mov edx, dword[rax + r8*4]
-    call printf
-    lea rcx, [space]
-    call puts
-    
-    inc r8d
-    jmp input_loop
-
-    ; --- Сортировка вставками ---
-sort_start:
-    mov dword [rbp-12], 1      ; i = 1
-
 start_sort:
-    mov eax, dword [rbp-12]
-    cmp eax, r13d
-    jge output_sorted_array
+    mov r12, 0
+    
+outer_loop:
+    cmp r12, [rbp-8]  ;if (i >= n - 1) goto print_array;
+    jge start_out
+    mov r14, r12    ;minIdx = i;
+    mov r13, r12    ;j=i
+    inc r13      ;j++
+  
+inner_loop:
+    cmp r13, [rbp-8] ;if (j >= n) goto swap_elements;
+    jge swap_elements
+    mov rdi, [rsi + r13*8] ;arr[j]]
+    cmp [rsi + r14*8], rdi  ;if (arr[minIdx] > arr[j]) goto inner_help;
+    jg inner_help
+    inc r13 ; j++
+    jmp inner_loop ;goto inner_loop  
+    
+inner_help:
+    mov r14, r13    ;minIdx = j
+    inc r13      ;j++
+    jmp inner_loop  ;goto inner_loop
+    
+swap_elements:
+    cmp r13, r12    ;if (minIdx != i) goto start_swap;
+    jne start_swap
+    inc r13      ;i++
+    jmp outer_loop  ;goto outer_loop
+    
+    
+start_swap:  
+    mov rbx, [rsi + r12*8]  ;temp = arr[i]
+    mov rdi, [rsi + r14*8]
+    
+    mov [rsi + r12*8], rdi    ;arr[i] = arr[minIdx]
+    mov [rsi + r14*8], rbx     ;arr[minIdx] = temp
+    
+    inc r12      ;i++
+    jmp outer_loop      ;goto outer_loop
+    
+start_out:
+    mov r12, 0 
+    
+print:    
+    cmp r12, [rbp-8]
+    jge end_out  
+    lea rcx, [fmt]
+    mov rdx, [rsi + r12*8] 
+    call printf
 
-    mov r8d, eax               ; r8d = i
-    mov rax, [rbp-8]           ; Адрес массива
-    mov eax, [rax + r8*4]      ; newElement = mass[i]
-    mov dword [rbp-16], eax    ; Сохраняем newElement
-    dec r8d                    ; location = i - 1
-
-check_condition:
-    cmp r8d, -1
-    jl insert_element
-
-    mov rax, [rbp-8]           ; Адрес массива
-    mov eax, [rax + r8*4]      ; mass[location]
-    cmp eax, [rbp-16]          ; Сравниваем mass[location] и newElement
-    jle insert_element
-
-    ; Сдвиг элементов массива
-    mov rax, [rbp-8]           ; Адрес массива
-    mov eax, [rax + r8*4]
-    mov [rax + r8*4 + 4], eax
-    dec r8d
-    jmp check_condition
-
-insert_element:
-    mov rax, [rbp-8]           ; Адрес массива
-    lea rcx, [rax + r8*4 + 4]  ; mass[location + 1]
-    mov eax, [rbp-16]          ; newElement
-    mov [rcx], eax
-
-    add dword [rbp-12], 1      ; i++
-    jmp start_sort
-
-    ; --- Вывод массива ---
-output_sorted_array:
-    lea rcx, [fmt_output_prompt]
-    call printf                ; printf("Sorted array:\n")
-
-    xor r8d, r8d
-
-output_loop:
-    cmp r8d, r13d
-    jge cleanup
-
-    mov rax, [rbp-8]           ; Адрес массива
-    mov eax, [rax + r8*4]      ; mass[i]
-    lea rcx, [fmt_dec]         ; Строка формата
-    call printf                ; printf("%d", mass[i])
-    inc r8d
-    jmp output_loop
-
-    ; --- Очистка памяти ---
-cleanup:
-    mov rax, [rbp-8]
-    test rax, rax
-    jz end_program
-    mov rcx, rax
-    call free                  ; free(mass)
-
-end_program:
-    mov rsp, rbp
-    pop rbp
+    inc r12
+    jmp print
+end_out:
+    
+    mov rcx, rsi
+    call free
+            
+    leave
+    mov rbp, rsp
+    pop rsi
     ret
